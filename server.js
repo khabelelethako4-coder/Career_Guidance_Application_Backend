@@ -1,4 +1,4 @@
-// server.js
+// server.js - COMPLETE UPDATED VERSION WITH PROPER CORS
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -15,19 +15,39 @@ dotenv.config();
 
 const app = express();
 
-// ======================
-// ENHANCED MIDDLEWARE FOR FRONTEND COMPATIBILITY
-// ======================
+// Enhanced CORS Configuration
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:8080',
+  'https://career-guidance-application-fronten-inky.vercel.app',
+  'https://career-guidance-application-frontend.vercel.app',
+  'https://career-guidance-application-frontend-git-main.vercel.app',
+  'https://career-guidance-application-frontend-*.vercel.app'
+];
 
-// CORS configuration for frontend compatibility
-app.use(cors({
-  origin: [
-    'http://localhost:3000', // React dev server
-    'http://localhost:5173', // Vite dev server
-    'http://localhost:8080', // Vue dev server
-    'https://*.vercel.app',  // All Vercel deployments
-    process.env.FRONTEND_URL // Your custom frontend URL
-  ].filter(Boolean),
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in allowed list or matches wildcard pattern
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (allowedOrigin.includes('*')) {
+        const regex = new RegExp(allowedOrigin.replace('*', '.*'));
+        return regex.test(origin);
+      }
+      return allowedOrigin === origin;
+    });
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log('🚫 CORS blocked origin:', origin);
+      callback(new Error(`Not allowed by CORS. Origin: ${origin}`));
+    }
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: [
     'Content-Type', 
@@ -35,45 +55,29 @@ app.use(cors({
     'X-Requested-With',
     'Accept',
     'Origin',
-    'X-Auth-Token',
-    'X-API-Key'
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
   ],
-  credentials: true,
-  preflightContinue: false,
-  optionsSuccessStatus: 204,
+  exposedHeaders: [
+    'Content-Range',
+    'X-Content-Range'
+  ],
   maxAge: 86400 // 24 hours
-}));
+};
 
-// Handle preflight requests
-app.options('*', cors());
+// Apply CORS middleware
+app.use(cors(corsOptions));
 
-// Security headers that work with frontend
-app.use((req, res, next) => {
-  // Remove restrictive CSP that blocks frontend scripts
-  res.removeHeader('Content-Security-Policy');
-  
-  // Set permissive CSP for development (adjust for production)
-  res.setHeader('Content-Security-Policy', 
-    "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:; " +
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:; " +
-    "connect-src 'self' https: wss: http://localhost:*; " +
-    "style-src 'self' 'unsafe-inline' https:; " +
-    "font-src 'self' https: data:; " +
-    "img-src 'self' https: data: blob:;"
-  );
-  
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  next();
-});
+// Handle preflight requests globally
+app.options('*', cors(corsOptions));
 
-app.use(express.json());
+// Middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// ======================
-// FIREBASE ADMIN INITIALIZATION
-// ======================
+console.log('✅ CORS configured for origins:', allowedOrigins);
 
+// Firebase Admin initialization - ES Module version
 let db;
 try {
   console.log('🚀 Initializing Firebase Admin...');
@@ -122,16 +126,15 @@ try {
   }
   
   db = admin.firestore();
+  
+  // Add error handling for Firestore
+  db.settings({ ignoreUndefinedProperties: true });
   console.log('✅ Firestore database initialized');
   
 } catch (error) {
   console.error('❌ Error initializing Firebase Admin:', error);
   process.exit(1);
 }
-
-// ======================
-// ROUTE IMPORTS
-// ======================
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -140,52 +143,32 @@ import institutionRoutes from './routes/institutions.js';
 import companyRoutes from './routes/companies.js';
 import adminRoutes from './routes/admin.js';
 
-// ======================
-// ROUTES
-// ======================
-
-// Root route - Fix "Cannot GET /" error
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Career Guidance Backend API',
-    status: 'Running',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    endpoints: {
-      root: 'GET /',
-      health: 'GET /api/health',
-      firestoreTest: 'GET /api/test-firestore',
-      auth: 'POST /api/auth/login, POST /api/auth/register',
-      students: 'GET /api/students',
-      institutions: 'GET /api/institutions',
-      companies: 'GET /api/companies',
-      admin: 'GET /api/admin'
-    },
-    documentation: 'API documentation coming soon...'
-  });
-});
-
-// API Routes
+// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/institutions', institutionRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Basic health check route
+// Enhanced health check route with CORS info
 app.get('/api/health', (req, res) => {
+  const requestOrigin = req.headers.origin || 'No origin header';
+  
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
     firebase: admin.apps.length > 0 ? 'connected' : 'disconnected',
     projectId: process.env.FIREBASE_PROJECT_ID,
-    environment: process.env.NODE_ENV,
-    port: process.env.PORT
+    cors: {
+      enabled: true,
+      requestOrigin: requestOrigin,
+      allowedOrigins: allowedOrigins
+    },
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
-// Test Firestore connection
+// Enhanced test Firestore connection
 app.get('/api/test-firestore', async (req, res) => {
   try {
     if (!db) {
@@ -199,75 +182,61 @@ app.get('/api/test-firestore', async (req, res) => {
         timestamp: new Date(),
         status: 'connected',
         message: 'Firestore connection test successful',
-        environment: process.env.NODE_ENV
+        server: 'career-guidance-backend'
       });
     }
     
     res.json({ 
       message: 'Firestore connection successful',
       timestamp: new Date().toISOString(),
-      documentId: 'connection'
+      documentId: testDoc.id,
+      exists: testDoc.exists
     });
   } catch (error) {
+    console.error('❌ Firestore test error:', error);
     res.status(500).json({ 
       error: 'Firestore connection failed',
       details: error.message,
-      help: 'Check Firebase service account configuration'
+      code: error.code
     });
   }
 });
 
-// ======================
-// ERROR HANDLING MIDDLEWARE
-// ======================
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('🚨 Server Error:', error);
+  
+  if (error.message.includes('CORS')) {
+    return res.status(403).json({ 
+      error: 'CORS Error', 
+      message: error.message,
+      allowedOrigins: allowedOrigins 
+    });
+  }
+  
+  res.status(500).json({ 
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'production' ? 'Something went wrong!' : error.message
+  });
+});
 
-// 404 handler for undefined routes
+// 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({
+  res.status(404).json({ 
     error: 'Route not found',
     path: req.originalUrl,
-    method: req.method,
-    availableRoutes: [
-      'GET /',
-      'GET /api/health',
-      'GET /api/test-firestore',
-      'POST /api/auth/*',
-      'GET /api/students/*',
-      'GET /api/institutions/*',
-      'GET /api/companies/*',
-      'GET /api/admin/*'
-    ],
-    timestamp: new Date().toISOString()
+    method: req.method 
   });
 });
-
-// Global error handler
-app.use((error, req, res, next) => {
-  console.error('🚨 Global error handler:', error);
-  res.status(500).json({
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// ======================
-// SERVER STARTUP
-// ======================
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🎯 Server running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV}`);
-  console.log(`🌐 Root URL: http://localhost:${PORT}/`);
-  console.log(`🔧 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🔥 Firestore test: http://localhost:${PORT}/api/test-firestore`);
+  console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🔧 Firestore test: http://localhost:${PORT}/api/test-firestore`);
   console.log(`🔑 Auth routes: http://localhost:${PORT}/api/auth/`);
-  console.log(`👥 Student routes: http://localhost:${PORT}/api/students/`);
-  console.log(`🏫 Institution routes: http://localhost:${PORT}/api/institutions/`);
-  console.log(`💼 Company routes: http://localhost:${PORT}/api/companies/`);
-  console.log(`⚡ Admin routes: http://localhost:${PORT}/api/admin/`);
-  console.log(`🔒 CORS enabled for frontend compatibility`);
+  console.log(`🌐 CORS enabled for:`, allowedOrigins);
+  console.log(`⚡ Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 export { db, admin };
