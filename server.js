@@ -1,50 +1,53 @@
-// server.js - COMPLETE UPDATED VERSION WITH PROPER CORS
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import admin from 'firebase-admin';
-import { readFile } from 'fs/promises';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+const express = require('express');
+const cors = require('cors');
+const admin = require('firebase-admin');
+const { getAuth } = require('firebase-admin/auth');
+const serviceAccount = require('./serviceAccountKey.json');
 
-// Fix for __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-dotenv.config();
+// Initialize Firebase Admin
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Enhanced CORS Configuration
+// CORS Configuration
 const allowedOrigins = [
+  'https://career-guidance-application-fronten-inky.vercel.app',
+  'https://career-guidance-appl-git-a985c3-khabelelethako4-coders-projects.vercel.app',
+  'https://career-guidance-application-frontend-stcg-9tiekzm6v.vercel.app',
   'http://localhost:3000',
   'http://localhost:5173',
-  'http://localhost:8080',
-  'https://career-guidance-application-fronten-inky.vercel.app',
-  'https://career-guidance-application-frontend.vercel.app',
-  'https://career-guidance-application-frontend-git-main.vercel.app',
-  'https://career-guidance-application-frontend-*.vercel.app'
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173'
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    // Allow requests with no origin (like mobile apps, Postman, or server-to-server requests)
+    if (!origin) {
+      return callback(null, true);
+    }
     
-    // Check if origin is in allowed list or matches wildcard pattern
-    const isAllowed = allowedOrigins.some(allowedOrigin => {
-      if (allowedOrigin.includes('*')) {
-        const regex = new RegExp(allowedOrigin.replace('*', '.*'));
-        return regex.test(origin);
-      }
-      return allowedOrigin === origin;
-    });
-    
-    if (isAllowed) {
+    // Check if the origin is in the allowed list
+    if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log('🚫 CORS blocked origin:', origin);
-      callback(new Error(`Not allowed by CORS. Origin: ${origin}`));
+      // Also allow any Vercel preview deployments that match your project pattern
+      const isVercelPreview = origin && (
+        origin.includes('career-guidance-application') ||
+        origin.includes('career-guidance-appl') ||
+        origin.endsWith('.vercel.app')
+      );
+      
+      if (isVercelPreview) {
+        console.log('✅ Allowing Vercel preview deployment:', origin);
+        callback(null, true);
+      } else {
+        console.log('🚫 CORS blocked origin:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
     }
   },
   credentials: true,
@@ -52,191 +55,201 @@ const corsOptions = {
   allowedHeaders: [
     'Content-Type', 
     'Authorization', 
-    'X-Requested-With',
-    'Accept',
+    'X-Requested-With', 
+    'Accept', 
     'Origin',
-    'Access-Control-Request-Method',
-    'Access-Control-Request-Headers'
+    'x-auth-token'
   ],
-  exposedHeaders: [
-    'Content-Range',
-    'X-Content-Range'
-  ],
-  maxAge: 86400 // 24 hours
+  optionsSuccessStatus: 200
 };
 
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Handle preflight requests globally
+// Handle preflight requests for all routes
 app.options('*', cors(corsOptions));
 
-// Middleware
+// Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-console.log('✅ CORS configured for origins:', allowedOrigins);
-
-// Firebase Admin initialization - ES Module version
-let db;
-try {
-  console.log('🚀 Initializing Firebase Admin...');
-  
-  // Method 1: Try to load service account from file
-  try {
-    const serviceAccountPath = join(__dirname, 'serviceAccountKey.json');
-    const serviceAccount = JSON.parse(await readFile(serviceAccountPath, 'utf8'));
-    
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
-    });
-    
-    console.log('✅ Firebase Admin initialized with service account');
-  } catch (fileError) {
-    console.log('📝 Service account file not found, trying alternative methods...');
-    
-    // Method 2: Try environment variables
-    if (process.env.FIREBASE_PRIVATE_KEY) {
-      const serviceAccount = {
-        type: "service_account",
-        project_id: process.env.FIREBASE_PROJECT_ID,
-        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-        private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-        client_email: process.env.FIREBASE_CLIENT_EMAIL,
-        client_id: process.env.FIREBASE_CLIENT_ID,
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-      };
-      
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
-      });
-      
-      console.log('✅ Firebase Admin initialized with environment variables');
-    } else {
-      // Method 3: Initialize without credentials (limited functionality)
-      admin.initializeApp({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-      });
-      
-      console.log('⚠️ Firebase Admin initialized in limited mode (no service account)');
-    }
-  }
-  
-  db = admin.firestore();
-  
-  // Add error handling for Firestore
-  db.settings({ ignoreUndefinedProperties: true });
-  console.log('✅ Firestore database initialized');
-  
-} catch (error) {
-  console.error('❌ Error initializing Firebase Admin:', error);
-  process.exit(1);
-}
-
-// Import routes
-import authRoutes from './routes/auth.js';
-import studentRoutes from './routes/students.js';
-import institutionRoutes from './routes/institutions.js';
-import companyRoutes from './routes/companies.js';
-import adminRoutes from './routes/admin.js';
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/students', studentRoutes);
-app.use('/api/institutions', institutionRoutes);
-app.use('/api/companies', companyRoutes);
-app.use('/api/admin', adminRoutes);
-
-// Enhanced health check route with CORS info
+// Health check endpoint
 app.get('/api/health', (req, res) => {
-  const requestOrigin = req.headers.origin || 'No origin header';
-  
-  res.json({ 
+  res.status(200).json({ 
     status: 'OK', 
+    message: 'Career Guidance Backend is running',
     timestamp: new Date().toISOString(),
-    firebase: admin.apps.length > 0 ? 'connected' : 'disconnected',
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    cors: {
-      enabled: true,
-      requestOrigin: requestOrigin,
-      allowedOrigins: allowedOrigins
-    },
-    environment: process.env.NODE_ENV || 'development'
+    allowedOrigins: allowedOrigins
   });
 });
 
-// Enhanced test Firestore connection
-app.get('/api/test-firestore', async (req, res) => {
+// Auth middleware to verify Firebase tokens
+const authenticateFirebaseToken = async (req, res, next) => {
   try {
-    if (!db) {
-      return res.status(500).json({ error: 'Firestore not initialized' });
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'No token provided' });
     }
+
+    const token = authHeader.split('Bearer ')[1];
     
-    const testDoc = await db.collection('test').doc('connection').get();
-    
-    if (!testDoc.exists) {
-      await db.collection('test').doc('connection').set({
-        timestamp: new Date(),
-        status: 'connected',
-        message: 'Firestore connection test successful',
-        server: 'career-guidance-backend'
+    try {
+      const decodedToken = await getAuth().verifyIdToken(token);
+      req.user = decodedToken;
+      next();
+    } catch (firebaseError) {
+      console.error('Firebase token verification failed:', firebaseError);
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    return res.status(500).json({ error: 'Authentication failed' });
+  }
+};
+
+// User registration endpoint
+app.post('/api/register', authenticateFirebaseToken, async (req, res) => {
+  try {
+    const { firstName, lastName, phone, companyName, position, role } = req.body;
+    const userId = req.user.uid;
+    const email = req.user.email;
+
+    // Validate required fields
+    if (!firstName || !lastName || !phone || !role) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: firstName, lastName, phone, role' 
       });
     }
+
+    // Additional validation for company role
+    if (role === 'company' && (!companyName || !position)) {
+      return res.status(400).json({ 
+        error: 'Company registration requires companyName and position' 
+      });
+    }
+
+    // Create user profile in Firestore
+    const userProfile = {
+      uid: userId,
+      email: email,
+      firstName,
+      lastName,
+      phone,
+      role,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    // Add role-specific fields
+    if (role === 'company') {
+      userProfile.companyName = companyName;
+      userProfile.position = position;
+      userProfile.companyProfile = {
+        name: companyName,
+        position: position,
+        verified: false
+      };
+    }
+
+    // Save to Firestore
+    await admin.firestore().collection('users').doc(userId).set(userProfile);
+
+    console.log(`✅ User profile created for: ${email} (${role})`);
     
-    res.json({ 
-      message: 'Firestore connection successful',
-      timestamp: new Date().toISOString(),
-      documentId: testDoc.id,
-      exists: testDoc.exists
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      user: {
+        uid: userId,
+        email: email,
+        role: role,
+        profile: userProfile
+      }
     });
+
   } catch (error) {
-    console.error('❌ Firestore test error:', error);
+    console.error('Registration error:', error);
     res.status(500).json({ 
-      error: 'Firestore connection failed',
-      details: error.message,
-      code: error.code
+      error: 'Internal server error during registration',
+      details: error.message 
     });
   }
+});
+
+// Get user profile endpoint
+app.get('/api/user/profile', authenticateFirebaseToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User profile not found' });
+    }
+
+    const userData = userDoc.data();
+    
+    // Remove sensitive data if needed
+    delete userData.updatedAt;
+    
+    res.status(200).json({
+      success: true,
+      user: userData
+    });
+
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch user profile',
+      details: error.message 
+    });
+  }
+});
+
+// Test endpoint to verify CORS is working
+app.get('/api/test-cors', (req, res) => {
+  res.status(200).json({
+    message: 'CORS is working!',
+    allowedOrigins: allowedOrigins,
+    yourOrigin: req.headers.origin || 'No origin header',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error('🚨 Server Error:', error);
-  
-  if (error.message.includes('CORS')) {
-    return res.status(403).json({ 
-      error: 'CORS Error', 
-      message: error.message,
-      allowedOrigins: allowedOrigins 
+  if (error.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      error: 'CORS Error',
+      message: 'Origin not allowed',
+      yourOrigin: req.headers.origin,
+      allowedOrigins: allowedOrigins
     });
   }
   
+  console.error('Unhandled error:', error);
   res.status(500).json({ 
-    error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'production' ? 'Something went wrong!' : error.message
+    error: 'Internal server error',
+    message: error.message 
   });
 });
 
-// 404 handler
+// 404 handler for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({ 
     error: 'Route not found',
     path: req.originalUrl,
-    method: req.method 
+    method: req.method
   });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🎯 Server running on port ${PORT}`);
-  console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🔧 Firestore test: http://localhost:${PORT}/api/test-firestore`);
-  console.log(`🔑 Auth routes: http://localhost:${PORT}/api/auth/`);
-  console.log(`🌐 CORS enabled for:`, allowedOrigins);
-  console.log(`⚡ Environment: ${process.env.NODE_ENV || 'development'}`);
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Career Guidance Backend running on port ${PORT}`);
+  console.log('✅ Allowed CORS origins:');
+  allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
+  console.log('🔧 CORS configured for Vercel deployments');
 });
 
-export { db, admin };
+module.exports = app;
