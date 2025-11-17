@@ -1,10 +1,31 @@
-const express = require('express');
-const cors = require('cors');
-const admin = require('firebase-admin');
-const { getAuth } = require('firebase-admin/auth');
-const serviceAccount = require('./serviceAccountKey.json');
+import express from 'express';
+import cors from 'cors';
+import admin from 'firebase-admin';
+import { getAuth } from 'firebase-admin/auth';
+import { readFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Initialize Firebase Admin
+let serviceAccount;
+try {
+  const serviceAccountPath = join(__dirname, 'serviceAccountKey.json');
+  const serviceAccountFile = await readFile(serviceAccountPath, 'utf8');
+  serviceAccount = JSON.parse(serviceAccountFile);
+} catch (error) {
+  console.error('Error loading service account:', error);
+  // For Render.com, you might use environment variables instead
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    throw new Error('Firebase service account configuration not found');
+  }
+}
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
@@ -252,4 +273,4 @@ app.listen(PORT, () => {
   console.log('🔧 CORS configured for Vercel deployments');
 });
 
-module.exports = app;
+export default app;
