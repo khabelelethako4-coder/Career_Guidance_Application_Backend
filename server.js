@@ -169,6 +169,224 @@ const authenticateFirebaseToken = async (req, res, next) => {
   }
 };
 
+// ============================================================================
+// ADDED AUTH ROUTES - These were missing and causing 404 errors
+// ============================================================================
+
+// POST /api/auth/login - For Firebase Auth login with ID token
+app.post('/api/auth/login', async (req, res) => {
+  console.log('🔐 Processing login request...');
+  
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      console.log('❌ No ID token provided');
+      return res.status(400).json({ error: 'ID token is required' });
+    }
+
+    console.log('🔑 Verifying ID token...');
+
+    // Verify Firebase ID token
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    
+    console.log('✅ ID token verified for user:', decodedToken.email);
+
+    // Get user from Firestore
+    const userDoc = await admin.firestore().collection('users').doc(decodedToken.uid).get();
+    
+    if (!userDoc.exists) {
+      console.log('❌ User not found in Firestore:', decodedToken.uid);
+      return res.status(404).json({ 
+        error: 'User profile not found. Please complete registration.' 
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Check if email is verified using Firebase Auth data
+    if (!decodedToken.email_verified) {
+      console.log('❌ Email not verified for user:', decodedToken.email);
+      return res.status(401).json({ 
+        error: 'Please verify your email before logging in.',
+        needsVerification: true,
+        email: decodedToken.email
+      });
+    }
+
+    console.log('✅ Login successful for user:', decodedToken.email);
+    
+    res.json({
+      message: 'Login successful',
+      user: {
+        uid: decodedToken.uid,
+        email: decodedToken.email,
+        role: userData.role,
+        profile: userData.profile,
+        isVerified: true
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Login error:', error);
+    res.status(401).json({ 
+      error: 'Invalid credentials',
+      details: error.message 
+    });
+  }
+});
+
+// POST /api/auth/create-profile - For creating user profile after Firebase Auth registration
+app.post('/api/auth/create-profile', async (req, res) => {
+  console.log('🚀 Starting profile creation...');
+  
+  try {
+    const { uid, email, role, profile } = req.body;
+
+    // Validate required fields
+    if (!uid || !email || !role || !profile) {
+      console.log('❌ Missing required fields for profile creation');
+      return res.status(400).json({ 
+        error: 'Missing required fields: uid, email, role, and profile are required'
+      });
+    }
+
+    // Validate profile fields
+    if (!profile.firstName || !profile.lastName) {
+      console.log('❌ Missing profile fields');
+      return res.status(400).json({ 
+        error: 'Missing profile fields: firstName and lastName are required'
+      });
+    }
+
+    // Check if user already exists in Firestore
+    const existingUser = await admin.firestore().collection('users').doc(uid).get();
+    if (existingUser.exists) {
+      console.log('❌ User profile already exists in Firestore');
+      return res.status(400).json({ 
+        error: 'User profile already exists. Please login instead.' 
+      });
+    }
+
+    // Verify the UID exists in Firebase Auth
+    try {
+      const authUser = await admin.auth().getUser(uid);
+      console.log('✅ Verified Firebase Auth user exists:', authUser.email);
+    } catch (authError) {
+      console.error('❌ Firebase Auth user not found for UID:', uid);
+      return res.status(400).json({ 
+        error: 'Invalid user ID. Please register again.' 
+      });
+    }
+
+    // Create user profile in Firestore
+    const userData = {
+      uid: uid,
+      email: email.trim().toLowerCase(),
+      role,
+      profile: {
+        firstName: profile.firstName.trim(),
+        lastName: profile.lastName.trim(),
+        phone: profile.phone?.trim() || '',
+        ...(role === 'student' && {
+          studentId: profile.studentId || '',
+          major: profile.major || ''
+        }),
+        ...(role === 'company' && {
+          companyName: profile.companyName || '',
+          position: profile.position || ''
+        }),
+        ...(role === 'institution' && {
+          institutionId: profile.institutionId,
+          institutionName: profile.institutionName
+        })
+      },
+      isVerified: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    await admin.firestore().collection('users').doc(uid).set(userData);
+    console.log('✅ User profile created in Firestore:', {
+      uid,
+      email: userData.email,
+      role: userData.role
+    });
+
+    res.status(201).json({
+      message: 'Profile created successfully! Please verify your email before logging in.',
+      uid,
+      email: userData.email,
+      role,
+      profile: userData.profile,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Profile creation error:', error);
+    res.status(400).json({ 
+      error: 'Profile creation failed',
+      details: error.message 
+    });
+  }
+});
+
+// POST /api/auth/resend-verification - For resending email verification
+app.post('/api/auth/resend-verification', async (req, res) => {
+  console.log('📧 Processing resend verification request...');
+  
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      console.log('❌ No email provided for resend verification');
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    console.log('🔍 Looking up user by email:', email);
+
+    // Get user by email
+    const userRecord = await admin.auth().getUserByEmail(email);
+    console.log('✅ User found for verification resend:', userRecord.uid);
+
+    // Generate email verification link
+    const verificationLink = await admin.auth().generateEmailVerificationLink(email);
+    
+    console.log('✅ Verification link generated for:', email);
+
+    const response = {
+      message: 'Verification email sent successfully!',
+      emailSent: true,
+      email: email
+    };
+
+    // Only return verification link in development for testing
+    if (process.env.NODE_ENV === 'development') {
+      response.verificationLink = verificationLink;
+      console.log('🔗 Development verification link:', verificationLink);
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error('❌ Resend verification error:', error);
+    
+    let errorMessage = 'Failed to resend verification email';
+    
+    if (error.code === 'auth/user-not-found') {
+      errorMessage = 'No user found with this email address.';
+    }
+    
+    res.status(400).json({ 
+      error: errorMessage,
+      details: error.message 
+    });
+  }
+});
+
+// ============================================================================
+// EXISTING ROUTES (Keep your original routes)
+// ============================================================================
+
 // User registration endpoint
 app.post('/api/register', authenticateFirebaseToken, async (req, res) => {
   if (!firebaseInitialized) {
@@ -361,6 +579,12 @@ app.listen(PORT, () => {
   console.log(`🚀 Career Guidance Backend running on port ${PORT}`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔥 Firebase: ${firebaseInitialized ? '✅ Initialized' : '❌ Disabled'}`);
+  console.log('✅ Available Auth Endpoints:');
+  console.log('   - POST /api/auth/login');
+  console.log('   - POST /api/auth/create-profile');
+  console.log('   - POST /api/auth/resend-verification');
+  console.log('   - POST /api/register');
+  console.log('   - GET /api/user/profile');
   console.log('✅ Allowed CORS origins:');
   allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
   
