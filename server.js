@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import admin from 'firebase-admin';
 import { getAuth } from 'firebase-admin/auth';
-import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -10,25 +9,56 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Initialize Firebase Admin
-let serviceAccount;
-try {
-  const serviceAccountPath = join(__dirname, 'serviceAccountKey.json');
-  const serviceAccountFile = await readFile(serviceAccountPath, 'utf8');
-  serviceAccount = JSON.parse(serviceAccountFile);
-} catch (error) {
-  console.error('Error loading service account:', error);
-  // For Render.com, you might use environment variables instead
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else {
-    throw new Error('Firebase service account configuration not found');
-  }
-}
+// Initialize Firebase Admin with environment variables
+let firebaseInitialized = false;
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+try {
+  console.log('🚀 Initializing Firebase Admin...');
+  
+  // Check if we have the required environment variables
+  if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
+    console.error('❌ Missing required Firebase environment variables');
+    console.log('📋 Required variables: FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL');
+    
+    // Try alternative approach with service account JSON string
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      console.log('🔧 Trying FIREBASE_SERVICE_ACCOUNT environment variable...');
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      });
+      firebaseInitialized = true;
+      console.log('✅ Firebase Admin initialized with FIREBASE_SERVICE_ACCOUNT');
+    } else {
+      throw new Error('Missing Firebase configuration. Please set Firebase environment variables.');
+    }
+  } else {
+    // Initialize with individual environment variables
+    const serviceAccount = {
+      type: "service_account",
+      project_id: process.env.FIREBASE_PROJECT_ID,
+      private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID || "key-id",
+      private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      client_email: process.env.FIREBASE_CLIENT_EMAIL,
+      client_id: process.env.FIREBASE_CLIENT_ID || "client-id",
+      auth_uri: "https://accounts.google.com/o/oauth2/auth",
+      token_uri: "https://oauth2.googleapis.com/token",
+      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+    };
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`,
+      storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
+    });
+    
+    firebaseInitialized = true;
+    console.log('✅ Firebase Admin initialized with environment variables');
+  }
+} catch (error) {
+  console.error('❌ Error initializing Firebase Admin:', error);
+  console.log('⚠️ Firebase features will be disabled');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -100,12 +130,22 @@ app.get('/api/health', (req, res) => {
     status: 'OK', 
     message: 'Career Guidance Backend is running',
     timestamp: new Date().toISOString(),
+    firebase: firebaseInitialized ? 'connected' : 'disconnected',
+    environment: process.env.NODE_ENV || 'development',
     allowedOrigins: allowedOrigins
   });
 });
 
 // Auth middleware to verify Firebase tokens
 const authenticateFirebaseToken = async (req, res, next) => {
+  // Skip auth if Firebase is not initialized
+  if (!firebaseInitialized) {
+    return res.status(503).json({ 
+      error: 'Authentication service temporarily unavailable',
+      details: 'Firebase Admin SDK not properly initialized. Please check environment variables.'
+    });
+  }
+
   try {
     const authHeader = req.headers.authorization;
     
@@ -131,6 +171,13 @@ const authenticateFirebaseToken = async (req, res, next) => {
 
 // User registration endpoint
 app.post('/api/register', authenticateFirebaseToken, async (req, res) => {
+  if (!firebaseInitialized) {
+    return res.status(503).json({ 
+      error: 'Service temporarily unavailable',
+      details: 'Database service not initialized'
+    });
+  }
+
   try {
     const { firstName, lastName, phone, companyName, position, role } = req.body;
     const userId = req.user.uid;
@@ -200,6 +247,13 @@ app.post('/api/register', authenticateFirebaseToken, async (req, res) => {
 
 // Get user profile endpoint
 app.get('/api/user/profile', authenticateFirebaseToken, async (req, res) => {
+  if (!firebaseInitialized) {
+    return res.status(503).json({ 
+      error: 'Service temporarily unavailable',
+      details: 'Database service not initialized'
+    });
+  }
+
   try {
     const userId = req.user.uid;
     
@@ -234,8 +288,45 @@ app.get('/api/test-cors', (req, res) => {
     message: 'CORS is working!',
     allowedOrigins: allowedOrigins,
     yourOrigin: req.headers.origin || 'No origin header',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    firebase: firebaseInitialized ? 'connected' : 'disconnected'
   });
+});
+
+// Test Firebase connection endpoint
+app.get('/api/test-firebase', async (req, res) => {
+  if (!firebaseInitialized) {
+    return res.status(503).json({ 
+      error: 'Firebase not initialized',
+      details: 'Please check your Firebase environment variables'
+    });
+  }
+
+  try {
+    // Test Firestore connection
+    const testDoc = await admin.firestore().collection('test').doc('connection').get();
+    
+    if (!testDoc.exists) {
+      await admin.firestore().collection('test').doc('connection').set({
+        timestamp: new Date(),
+        status: 'connected',
+        message: 'Firestore connection test successful'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Firebase connection successful',
+      firestore: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Firebase test error:', error);
+    res.status(500).json({
+      error: 'Firebase connection failed',
+      details: error.message
+    });
+  }
 });
 
 // Error handling middleware
@@ -268,9 +359,18 @@ app.use('*', (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Career Guidance Backend running on port ${PORT}`);
+  console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔥 Firebase: ${firebaseInitialized ? '✅ Initialized' : '❌ Disabled'}`);
   console.log('✅ Allowed CORS origins:');
   allowedOrigins.forEach(origin => console.log(`   - ${origin}`));
-  console.log('🔧 CORS configured for Vercel deployments');
+  
+  if (!firebaseInitialized) {
+    console.log('❌ Firebase is not initialized. Please check your environment variables:');
+    console.log('   - FIREBASE_PROJECT_ID');
+    console.log('   - FIREBASE_PRIVATE_KEY'); 
+    console.log('   - FIREBASE_CLIENT_EMAIL');
+    console.log('   - Or FIREBASE_SERVICE_ACCOUNT (full JSON string)');
+  }
 });
 
 export default app;
